@@ -54,5 +54,5 @@ jobs:
       matrix: ${{fromJson(needs.generate_matrix.outputs.matrix)}}
     with:
       spec_file_path: ${{ inputs.spec_file_path }}
-      os_version: ${{ matrix.os_version }}
+      base_image_tag: ${{ matrix.base_image_tag }}
       platforms: ${{ toJson(matrix.platforms) }}
