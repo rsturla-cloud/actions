@@ -1,0 +1,58 @@
+name: Build Image
+
+on:
+  workflow_call:
+    inputs:
+      spec_file_path:
+        default: ./image.yml
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  generate_matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - name: Set matrix
+        id: set-matrix
+        env:
+          IMAGE_SPEC_PATH: ${{ inputs.spec_file_path }}
+        run: |
+          # Extract base image tags
+          BASE_IMAGE_TAGS=$(yq eval -o=json '.base_image_tags' $IMAGE_SPEC_PATH)
+          PLATFORMS=$(yq eval -o=json '.platforms' $IMAGE_SPEC_PATH)
+
+          # Initialize an empty matrix
+          MATRIX="{\"include\":[]}"
+
+          # Loop through the base image tags and create a matrix entry for each
+          for base_image_tag in $(echo "$BASE_IMAGE_TAGS" | jq -r '.[]'); do
+            MATRIX=$(echo "$MATRIX" | jq --argjson platforms "$PLATFORMS" --arg base_image_tag "$base_image_tag" \
+              '.include += [{"base_image_tag": $base_image_tag | tonumber, "platforms": $platforms}]')
+          done
+
+          # Minify the JSON
+          MATRIX=$(echo "$MATRIX" | jq -c '.')
+
+          echo "Created matrix: $MATRIX"
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+
+  build_oci:
+    uses: ./.github/workflows/_build-oci.yml
+    needs: generate_matrix
+    strategy:
+      fail-fast: false
+      matrix: ${{fromJson(needs.generate_matrix.outputs.matrix)}}
+    with:
+      spec_file_path: ${{ inputs.spec_file_path }}
+      os_version: ${{ matrix.os_version }}
+      platforms: ${{ toJson(matrix.platforms) }}
