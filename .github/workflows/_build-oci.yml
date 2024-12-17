@@ -6,7 +6,7 @@ on:
       spec_file_path:
         required: true
         type: string
-      base_image_tag:
+      source_tag:
         required: true
         type: string
       platforms:
@@ -14,7 +14,7 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}-${{ github.event.inputs.base_image_tag }}-${{ github.event.inputs.platforms }}
+  group: ${{ github.workflow }}-${{ github.ref || github.run_id }}-${{ github.event.inputs.source_tag }}-${{ github.event.inputs.platforms }}
   cancel-in-progress: true
 
 env:
@@ -34,7 +34,7 @@ jobs:
       - name: Set matrix
         id: set-matrix
         env:
-          BASE_IMAGE_TAG: ${{ inputs.base_image_tag }}
+          SOURCE_TAG: ${{ inputs.source_tag }}
           PLATFORMS_JSON: ${{ inputs.platforms }}
         run: |
           PLATFORMS=$(echo "$PLATFORMS_JSON" | jq -c '.')
@@ -46,8 +46,8 @@ jobs:
           # Loop through the platforms to build the matrix
           for platform in $(echo "$PLATFORMS" | jq -r '.[]'); do
             echo "Working on platform: $platform"
-            MATRIX=$(echo "$MATRIX" | jq --arg platform "$platform" --arg base_image_tag "$BASE_IMAGE_TAG" \
-              '.include += [{"base_image_tag": $base_image_tag, "platform": $platform}]')
+            MATRIX=$(echo "$MATRIX" | jq --arg platform "$platform" --arg source_tag "$SOURCE_TAG" \
+              '.include += [{"source_tag": $source_tag, "platform": $platform}]')
           done
 
           # Minify the JSON
@@ -61,7 +61,7 @@ jobs:
     strategy:
       matrix: ${{fromJson(needs.generate_matrix.outputs.matrix)}}
     outputs:
-      BASE_IMAGE_TAG: ${{ matrix.base_image_tag }}
+      SOURCE_TAG: ${{ matrix.source_tag }}
     steps:
       - name: Checkout
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
@@ -94,7 +94,7 @@ jobs:
         run: |
           podman build -t $IMAGE_REGISTRY:local \
             --iidfile /tmp/iidfile \
-            --build-arg BASE_IMAGE_TAG=${{ matrix.base_image_tag }} \
+            --build-arg SOURCE_TAG=${{ matrix.source_tag }} \
             .
 
           IMAGE_ID=$(cat /tmp/iidfile)
@@ -120,17 +120,17 @@ jobs:
       - name: Generate Outputs
         env:
           NAME: ${{ steps.metadata.outputs.NAME }}
-          BASE_IMAGE_TAG: ${{ matrix.base_image_tag }}
+          SOURCE_TAG: ${{ matrix.source_tag }}
           PLATFORM: ${{ matrix.platform }}
           DIGEST: ${{ steps.push-image.outputs.REMOTE_IMAGE_DIGEST }}
         run: |
           mkdir -p /tmp/outputs/digests
-          echo "$DIGEST" > /tmp/outputs/digests/$NAME-$BASE_IMAGE_TAG-$PLATFORM.txt
+          echo "$DIGEST" > /tmp/outputs/digests/$NAME-$SOURCE_TAG-$PLATFORM.txt
 
       - name: Upload Output Artifacts
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4
         with:
-          name: ${{ steps.build-image.outputs.IMAGE_NAME }}-${{ inputs.base_image_tag }}-${{ matrix.platform }}
+          name: ${{ steps.build-image.outputs.IMAGE_NAME }}-${{ inputs.source_tag }}-${{ matrix.platform }}
           retention-days: 1
           if-no-files-found: error
           path: |
@@ -148,7 +148,7 @@ jobs:
         id: metadata
         env:
           IMAGE_SPEC_PATH: ${{ inputs.spec_file_path }}
-          BASE_IMAGE_TAG: ${{ needs.build_image.outputs.BASE_IMAGE_TAG }}
+          SOURCE_TAG: ${{ needs.build_image.outputs.SOURCE_TAG }}
         run: |
           NAME=$(yq eval '.name' $IMAGE_SPEC_PATH)
           TYPE=$(yq eval '.type' $IMAGE_SPEC_PATH)
@@ -173,13 +173,13 @@ jobs:
 
           echo "NAME=$NAME" >> $GITHUB_OUTPUT
           echo "IMAGE_REGISTRY=$IMAGE_REGISTRY" >> $GITHUB_OUTPUT
-          echo "BASE_IMAGE_TAG=$BASE_IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "SOURCE_TAG=$SOURCE_TAG" >> $GITHUB_OUTPUT
           echo "TAGS=$TAGS_JSON" >> $GITHUB_OUTPUT
 
       - name: Fetch Build Outputs
         uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4
         with:
-          pattern: ${{ steps.metadata.outputs.NAME }}-${{ steps.metadata.outputs.BASE_IMAGE_TAG }}-*
+          pattern: ${{ steps.metadata.outputs.NAME }}-${{ steps.metadata.outputs.SOURCE_TAG }}-*
           merge-multiple: true
           path: /tmp/artifacts
 
@@ -202,9 +202,6 @@ jobs:
           echo "DIGESTS_JSON: $DIGESTS_JSON"
           DIGESTS_JSON=$(echo "$DIGESTS_JSON" | jq -c '.')
           echo "DIGESTS_JSON=$DIGESTS_JSON" >> $GITHUB_OUTPUT
-
-      - name: Show Outputs
-        run: cat $GITHUB_OUTPUT
 
       - name: Create Manifest
         id: create-manifest
@@ -241,10 +238,10 @@ jobs:
         env:
           IMAGE_REGISTRY: ${{ steps.metadata.outputs.IMAGE_REGISTRY }}
           TAGS: ${{ steps.metadata.outputs.TAGS }}
-          BASE_IMAGE_TAG: ${{ steps.metadata.outputs.BASE_IMAGE_TAG }}
+          SOURCE_TAG: ${{ steps.metadata.outputs.SOURCE_TAG }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
-          BASE_IMAGE_TAG=$BASE_IMAGE_TAG
+          SOURCE_TAG=$SOURCE_TAG
           COMMIT_SHA=$COMMIT_SHA
           COMMIT_SHA_SHORT=$(echo "$COMMIT_SHA" | cut -c1-7)
           BUILD_TIMESTAMP=$(date -u +"%Y%m%dT%H%M%SZ")
@@ -253,7 +250,7 @@ jobs:
           # Substitute the values in the tags using envsubst
           MANIFEST_TAGS=()
           for tag in $(echo "$TAGS" | jq -r '.[]'); do
-              TAG=$(BASE_IMAGE_TAG="$BASE_IMAGE_TAG" \
+              TAG=$(SOURCE_TAG="$SOURCE_TAG" \
                 COMMIT_SHA="$COMMIT_SHA" \
                 COMMIT_SHA_SHORT="$COMMIT_SHA_SHORT" \
                 BUILD_TIMESTAMP="$BUILD_TIMESTAMP" \
